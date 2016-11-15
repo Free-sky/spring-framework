@@ -23,111 +23,129 @@ import org.junit.Test;
 import org.reactivestreams.Publisher;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.test.StepVerifier;
 
 import org.springframework.http.MediaType;
 import org.springframework.http.client.reactive.ReactorClientHttpConnector;
+import org.springframework.http.codec.BodyExtractors;
 import org.springframework.http.codec.ServerSentEvent;
-import org.springframework.tests.TestSubscriber;
+import org.springframework.web.client.reactive.ClientRequest;
 import org.springframework.web.client.reactive.WebClient;
 
-import static org.springframework.web.client.reactive.ClientWebRequestBuilders.get;
-import static org.springframework.web.client.reactive.ResponseExtractors.bodyStream;
-import static org.springframework.web.reactive.function.Router.route;
+import static org.springframework.http.codec.BodyInserters.fromServerSentEvents;
+import static org.springframework.web.reactive.function.RouterFunctions.route;
 
 /**
  * @author Arjen Poutsma
  */
 public class SseHandlerFunctionIntegrationTests
-		extends AbstractRoutingFunctionIntegrationTests {
+		extends AbstractRouterFunctionIntegrationTests {
+
+	private static final MediaType EVENT_STREAM = new MediaType("text", "event-stream");
 
 	private WebClient webClient;
 
 	@Before
 	public void createWebClient() {
-		this.webClient = new WebClient(new ReactorClientHttpConnector());
+		this.webClient = WebClient.create(new ReactorClientHttpConnector());
 	}
 
 	@Override
-	protected RoutingFunction<?> routingFunction() {
+	protected RouterFunction<?> routerFunction() {
 		SseHandler sseHandler = new SseHandler();
 		return route(RequestPredicates.GET("/string"), sseHandler::string)
-				.andOther(route(RequestPredicates.GET("/person"), sseHandler::person))
-				.andOther(route(RequestPredicates.GET("/event"), sseHandler::sse));
+				.and(route(RequestPredicates.GET("/person"), sseHandler::person))
+				.and(route(RequestPredicates.GET("/event"), sseHandler::sse));
 	}
 
 
 	@Test
 	public void sseAsString() throws Exception {
+		ClientRequest<Void> request =
+				ClientRequest
+						.GET("http://localhost:{port}/string", this.port)
+						.accept(EVENT_STREAM)
+						.build();
+
 		Flux<String> result = this.webClient
-				.perform(get("http://localhost:" + port + "/string")
-				.accept(new MediaType("text", "event-stream")))
-				.extract(bodyStream(String.class))
+				.exchange(request)
+				.flatMap(response -> response.body(BodyExtractors.toFlux(String.class)))
 				.filter(s -> !s.equals("\n"))
 				.map(s -> (s.replace("\n", "")))
 				.take(2);
 
-		TestSubscriber
-				.subscribe(result)
-				.await(Duration.ofSeconds(5))
-				.assertValues("data:foo 0", "data:foo 1");
+		StepVerifier.create(result)
+				.expectNext("data:foo 0")
+				.expectNext("data:foo 1")
+				.expectComplete()
+				.verify(Duration.ofSeconds(5));
 	}
 
 	@Test
 	public void sseAsPerson() throws Exception {
+		ClientRequest<Void> request =
+				ClientRequest
+						.GET("http://localhost:{port}/person", this.port)
+						.accept(EVENT_STREAM)
+						.build();
+
 		Mono<String> result = this.webClient
-				.perform(get("http://localhost:" + port + "/person")
-				.accept(new MediaType("text", "event-stream")))
-				.extract(bodyStream(String.class))
+				.exchange(request)
+				.flatMap(response -> response.body(BodyExtractors.toFlux(String.class)))
 				.filter(s -> !s.equals("\n"))
 				.map(s -> s.replace("\n", ""))
 				.takeUntil(s -> s.endsWith("foo 1\"}"))
 				.reduce((s1, s2) -> s1 + s2);
 
-		TestSubscriber
-				.subscribe(result)
-				.await(Duration.ofSeconds(5))
-				.assertValues("data:{\"name\":\"foo 0\"}data:{\"name\":\"foo 1\"}");
+		StepVerifier.create(result)
+				.expectNext("data:{\"name\":\"foo 0\"}data:{\"name\":\"foo 1\"}")
+				.expectComplete()
+				.verify(Duration.ofSeconds(5));
 	}
 
 	@Test
 	public void sseAsEvent() throws Exception {
+		ClientRequest<Void> request =
+				ClientRequest
+						.GET("http://localhost:{port}/event", this.port)
+						.accept(EVENT_STREAM)
+						.build();
+
 		Flux<String> result = this.webClient
-				.perform(get("http://localhost:" + port + "/event")
-				.accept(new MediaType("text", "event-stream")))
-				.extract(bodyStream(String.class))
+				.exchange(request)
+				.flatMap(response -> response.body(BodyExtractors.toFlux(String.class)))
 				.filter(s -> !s.equals("\n"))
 				.map(s -> s.replace("\n", ""))
 				.take(2);
 
-		TestSubscriber
-				.subscribe(result)
-				.await(Duration.ofSeconds(5))
-				.assertValues(
-						"id:0:bardata:foo",
-						"id:1:bardata:foo"
-				);
+		StepVerifier.create(result)
+				.expectNext("id:0:bardata:foo")
+				.expectNext("id:1:bardata:foo")
+				.expectComplete()
+				.verify(Duration.ofSeconds(5));
 	}
+
 	private static class SseHandler {
 
-		public Response<Publisher<String>> string(Request request) {
+		public ServerResponse<Publisher<String>> string(ServerRequest request) {
 			Flux<String> flux = Flux.interval(Duration.ofMillis(100)).map(l -> "foo " + l).take(2);
-			return Response.ok().sse(flux, String.class);
+			return ServerResponse.ok().body(fromServerSentEvents(flux, String.class));
 		}
 
-		public Response<Publisher<Person>> person(Request request) {
+		public ServerResponse<Publisher<Person>> person(ServerRequest request) {
 			Flux<Person> flux = Flux.interval(Duration.ofMillis(100))
 					.map(l -> new Person("foo " + l)).take(2);
-			return Response.ok().sse(flux, Person.class);
+			return ServerResponse.ok().body(fromServerSentEvents(flux, Person.class));
 		}
 
-		public Response<Publisher<ServerSentEvent<String>>> sse(Request request) {
+		public ServerResponse<Publisher<ServerSentEvent<String>>> sse(ServerRequest request) {
 			Flux<ServerSentEvent<String>> flux = Flux.interval(Duration.ofMillis(100))
 					.map(l -> ServerSentEvent.<String>builder().data("foo")
 							.id(Long.toString(l))
 							.comment("bar")
 							.build()).take(2);
 
-			return Response.ok().sse(flux);
+			return ServerResponse.ok().body(fromServerSentEvents(flux));
 		}
 	}
 
@@ -175,6 +193,5 @@ public class SseHandlerFunctionIntegrationTests
 					'}';
 		}
 	}
-
 
 }

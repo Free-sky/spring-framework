@@ -24,6 +24,7 @@ import org.apache.catalina.startup.Tomcat;
 
 import org.springframework.beans.factory.InitializingBean;
 import org.springframework.http.server.reactive.ServletHttpHandlerAdapter;
+import org.springframework.util.Assert;
 
 /**
  * @author Rossen Stoyanchev
@@ -54,12 +55,22 @@ public class TomcatHttpServer extends HttpServerSupport implements HttpServer, I
 		this.tomcatServer.setHostname(getHost());
 		this.tomcatServer.setPort(getPort());
 
-		ServletHttpHandlerAdapter servlet = new ServletHttpHandlerAdapter(getHttpHandler());
+		ServletHttpHandlerAdapter servlet = initServletHttpHandlerAdapter();
 
 		File base = new File(System.getProperty("java.io.tmpdir"));
 		Context rootContext = tomcatServer.addContext("", base.getAbsolutePath());
 		Tomcat.addServlet(rootContext, "httpHandlerServlet", servlet);
-		rootContext.addServletMapping("/", "httpHandlerServlet");
+		rootContext.addServletMappingDecoded("/", "httpHandlerServlet");
+	}
+
+	private ServletHttpHandlerAdapter initServletHttpHandlerAdapter() {
+		if (getHttpHandlerMap() != null) {
+			return new ServletHttpHandlerAdapter(getHttpHandlerMap());
+		}
+		else {
+			Assert.notNull(getHttpHandler());
+			return new ServletHttpHandlerAdapter(getHttpHandler());
+		}
 	}
 
 

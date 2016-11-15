@@ -54,16 +54,23 @@ public class ServletServerHttpResponse extends AbstractListenerServerHttpRespons
 
 	private volatile ResponseBodyProcessor bodyProcessor;
 
+	private volatile ResponseBodyFlushProcessor bodyFlushProcessor;
+
 
 	public ServletServerHttpResponse(HttpServletResponse response,
 			DataBufferFactory dataBufferFactory, int bufferSize) throws IOException {
 
 		super(dataBufferFactory);
+
 		Assert.notNull(response, "HttpServletResponse must not be null");
 		Assert.notNull(dataBufferFactory, "DataBufferFactory must not be null");
 		Assert.isTrue(bufferSize > 0, "Buffer size must be higher than 0");
+
 		this.response = response;
 		this.bufferSize = bufferSize;
+
+		// Tomcat expects WriteListener registration on initial thread
+		registerListener();
 	}
 
 
@@ -72,7 +79,7 @@ public class ServletServerHttpResponse extends AbstractListenerServerHttpRespons
 	}
 
 	@Override
-	protected void writeStatusCode() {
+	protected void applyStatusCode() {
 		HttpStatus statusCode = this.getStatusCode();
 		if (statusCode != null) {
 			getServletResponse().setStatus(statusCode.value());
@@ -80,7 +87,7 @@ public class ServletServerHttpResponse extends AbstractListenerServerHttpRespons
 	}
 
 	@Override
-	protected void writeHeaders() {
+	protected void applyHeaders() {
 		for (Map.Entry<String, List<String>> entry : getHeaders().entrySet()) {
 			String headerName = entry.getKey();
 			for (String headerValue : entry.getValue()) {
@@ -98,7 +105,7 @@ public class ServletServerHttpResponse extends AbstractListenerServerHttpRespons
 	}
 
 	@Override
-	protected void writeCookies() {
+	protected void applyCookies() {
 		for (String name : getCookies().keySet()) {
 			for (ResponseCookie httpCookie : getCookies().get(name)) {
 				Cookie cookie = new Cookie(name, httpCookie.getValue());
@@ -116,14 +123,14 @@ public class ServletServerHttpResponse extends AbstractListenerServerHttpRespons
 
 	@Override
 	protected Processor<Publisher<DataBuffer>, Void> createBodyFlushProcessor() {
-		Processor<Publisher<DataBuffer>, Void> processor = new ResponseBodyFlushProcessor();
-		registerListener();
+		ResponseBodyFlushProcessor processor = new ResponseBodyFlushProcessor();
+		this.bodyFlushProcessor = processor;
 		return processor;
 	}
 
 	private void registerListener() {
 		try {
-			outputStream().setWriteListener(writeListener);
+			outputStream().setWriteListener(this.writeListener);
 		}
 		catch (IOException ex) {
 			throw new UncheckedIOException(ex);
@@ -148,6 +155,30 @@ public class ServletServerHttpResponse extends AbstractListenerServerHttpRespons
 		}
 		else {
 			this.flushOnNext = true;
+		}
+	}
+
+	/** Handle a timeout/error callback from the Servlet container */
+	void handleAsyncListenerError(Throwable ex) {
+		if (this.bodyFlushProcessor != null) {
+			this.bodyFlushProcessor.cancel();
+			this.bodyFlushProcessor.onError(ex);
+		}
+		if (this.bodyProcessor != null) {
+			this.bodyProcessor.cancel();
+			this.bodyProcessor.onError(ex);
+		}
+	}
+
+	/** Handle a complete callback from the Servlet container */
+	void handleAsyncListenerComplete() {
+		if (this.bodyFlushProcessor != null) {
+			this.bodyFlushProcessor.cancel();
+			this.bodyFlushProcessor.onComplete();
+		}
+		if (this.bodyProcessor != null) {
+			this.bodyProcessor.cancel();
+			this.bodyProcessor.onComplete();
 		}
 	}
 

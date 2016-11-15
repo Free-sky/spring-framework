@@ -16,6 +16,7 @@
 
 package org.springframework.web.reactive.function;
 
+import java.util.Collections;
 import java.util.List;
 import java.util.function.Supplier;
 import java.util.stream.Stream;
@@ -42,16 +43,18 @@ import org.springframework.web.client.RestTemplate;
 import org.springframework.web.reactive.DispatcherHandler;
 import org.springframework.web.reactive.HandlerAdapter;
 import org.springframework.web.reactive.HandlerMapping;
-import org.springframework.web.reactive.config.WebReactiveConfiguration;
+import org.springframework.web.reactive.config.WebReactiveConfigurationSupport;
 import org.springframework.web.reactive.function.support.HandlerFunctionAdapter;
-import org.springframework.web.reactive.function.support.ResponseResultHandler;
+import org.springframework.web.reactive.function.support.ServerResponseResultHandler;
+import org.springframework.web.reactive.result.view.ViewResolver;
 import org.springframework.web.server.adapter.WebHttpHandlerBuilder;
 
 import static org.junit.Assert.assertEquals;
-import static org.springframework.web.reactive.function.Router.route;
+import static org.springframework.http.codec.BodyInserters.fromPublisher;
+import static org.springframework.web.reactive.function.RouterFunctions.route;
 
 /**
- * Tests the use of {@link HandlerFunction} and {@link RoutingFunction} in a 
+ * Tests the use of {@link HandlerFunction} and {@link RouterFunction} in a
  * {@link DispatcherHandler}.
  * @author Arjen Poutsma
  */
@@ -102,7 +105,7 @@ public class DispatcherHandlerIntegrationTests extends AbstractHttpHandlerIntegr
 	
 
 	@Configuration
-	static class TestConfiguration extends WebReactiveConfiguration {
+	static class TestConfiguration extends WebReactiveConfigurationSupport {
 
 		@Bean
 		public PersonHandler personHandler() {
@@ -115,10 +118,10 @@ public class DispatcherHandlerIntegrationTests extends AbstractHttpHandlerIntegr
 		}
 
 		@Bean
-		public HandlerMapping handlerMapping(RoutingFunction<?> routingFunction,
+		public HandlerMapping handlerMapping(RouterFunction<?> routerFunction,
 				ApplicationContext applicationContext) {
-			return Router.toHandlerMapping(routingFunction,
-					new Router.Configuration() {
+			return RouterFunctions.toHandlerMapping(routerFunction,
+					new HandlerStrategies() {
 						@Override
 						public Supplier<Stream<HttpMessageReader<?>>> messageReaders() {
 							return () -> getMessageReaders().stream();
@@ -128,33 +131,39 @@ public class DispatcherHandlerIntegrationTests extends AbstractHttpHandlerIntegr
 						public Supplier<Stream<HttpMessageWriter<?>>> messageWriters() {
 							return () -> getMessageWriters().stream();
 						}
+
+						@Override
+						public Supplier<Stream<ViewResolver>> viewResolvers() {
+							return () -> Collections.<ViewResolver>emptySet().stream();
+						}
 					});
 		}
 
 		@Bean
-		public RoutingFunction<?> routingFunction() {
+		public RouterFunction<?> routerFunction() {
 			PersonHandler personHandler = personHandler();
 			return route(RequestPredicates.GET("/mono"), personHandler::mono)
 					.and(route(RequestPredicates.GET("/flux"), personHandler::flux));
 		}
 
 		@Bean
-		public ResponseResultHandler responseResultHandler() {
-			return new ResponseResultHandler();
+		public ServerResponseResultHandler responseResultHandler() {
+			return new ServerResponseResultHandler();
 		}
 	}
 	
 	private static class PersonHandler {
 
-		public Response<Publisher<Person>> mono(Request request) {
+		public ServerResponse<Publisher<Person>> mono(ServerRequest request) {
 			Person person = new Person("John");
-			return Response.ok().stream(Mono.just(person), Person.class);
+			return ServerResponse.ok().body(fromPublisher(Mono.just(person), Person.class));
 		}
 
-		public Response<Publisher<Person>> flux(Request request) {
+		public ServerResponse<Publisher<Person>> flux(ServerRequest request) {
 			Person person1 = new Person("John");
 			Person person2 = new Person("Jane");
-			return Response.ok().stream(Flux.just(person1, person2), Person.class);
+			return ServerResponse.ok().body(
+					fromPublisher(Flux.just(person1, person2), Person.class));
 		}
 
 	}
